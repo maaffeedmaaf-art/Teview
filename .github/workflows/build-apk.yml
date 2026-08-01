@@ -10,6 +10,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
+    # p4a keeps TWO separate python recipes and both default to 3.14.2.
+    # Pinning only python3 leaves hostpython3 at 3.14 -> host/target
+    # mismatch. Recipe.version reads VERSION_<name>, so pin both here.
+    env:
+      VERSION_python3: '3.12.11'
+      VERSION_hostpython3: '3.12.11'
+
     steps:
       - uses: actions/checkout@v7
 
@@ -69,7 +76,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .buildozer
-          key: recipes-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          key: recipes-${{ runner.os }}-py31211-${{ hashFiles('buildozer.spec') }}
 
       - name: Install buildozer
         run: |
@@ -86,9 +93,13 @@ jobs:
         if: failure()
         run: |
           if [ -f build.log ]; then
-            grep -nE "error:|Error|Traceback|Command failed|fatal" build.log | tail -60 > errors.txt || true
-            echo "----- last 40 lines -----" >> errors.txt
-            tail -40 build.log >> errors.txt
+            {
+              echo "===== ERROR CONTEXT ====="
+              grep -n -B8 -A25 -m2 -E "Traceback \(most recent call last\)|\[ERROR\]|Error compiling|Command failed" build.log | head -180
+              echo
+              echo "===== LAST 60 REAL LINES (env dump filtered) ====="
+              grep -vE "^#? *[A-Z_0-9]+ = " build.log | tail -60
+            } > errors.txt
           else
             echo "Build never started - see the Early checks step above." > errors.txt
           fi
