@@ -37,15 +37,19 @@ jobs:
 
       - name: Early checks
         run: |
-          python -c "import ast; ast.parse(open('main.py',encoding='utf-8').read()); print('main.py OK')"
-          python -c "
-          import sys; sys.path.insert(0,'.')
-          import arabic_reshaper
-          from bidi.algorithm import get_display
-          print('Arabic OK:', get_display(arabic_reshaper.reshape('اختبار')))"
-          grep -q 'python3==3.12' buildozer.spec \
-            && echo 'Python pinned to 3.12 OK' \
-            || { echo '::error::buildozer.spec must pin python3==3.12'; exit 1; }
+          echo "=== FILES IN REPO ROOT ==="
+          ls -la
+          echo "=== main.py first line ==="
+          head -1 main.py || echo "MISSING main.py"
+          echo "=== buildozer.spec requirements line ==="
+          grep -n "^requirements" buildozer.spec || echo "MISSING requirements line"
+          echo "=== check 1 - main.py syntax ==="
+          python -c "import ast,io; ast.parse(io.open('main.py',encoding='utf-8').read()); print('main.py parses OK')"
+          echo "=== check 2 - vendored arabic libs ==="
+          python -c "import sys; sys.path.insert(0,'.'); import arabic_reshaper; from bidi.algorithm import get_display; print('arabic libs OK')"
+          echo "=== check 3 - python version pin ==="
+          grep -q "python3==3.12" buildozer.spec && echo "pin OK" || { echo "::error::buildozer.spec is missing the python3==3.12 pin"; exit 1; }
+          echo "=== ALL CHECKS PASSED ==="
 
       - name: System dependencies
         run: |
@@ -81,10 +85,13 @@ jobs:
       - name: Extract errors
         if: failure()
         run: |
-          grep -nE "error:|Error|Traceback|Command failed|fatal" build.log \
-            | tail -60 > errors.txt || true
-          echo "----- last 40 lines -----" >> errors.txt
-          tail -40 build.log >> errors.txt
+          if [ -f build.log ]; then
+            grep -nE "error:|Error|Traceback|Command failed|fatal" build.log | tail -60 > errors.txt || true
+            echo "----- last 40 lines -----" >> errors.txt
+            tail -40 build.log >> errors.txt
+          else
+            echo "Build never started - see the Early checks step above." > errors.txt
+          fi
           cat errors.txt
 
       - name: Upload error log
@@ -92,10 +99,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-errors
-          path: |
-            errors.txt
-            build.log
+          path: errors.txt
           retention-days: 14
+          if-no-files-found: warn
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
