@@ -51,6 +51,25 @@ def _hook(tp, val, tb):
 
 
 sys.excepthook = _hook
+
+# يلتقط الانهيارات الأصلية (SIGSEGV) التي لا يراها try/except
+try:
+    import faulthandler
+    faulthandler.enable(file=_LOG or sys.__stderr__, all_threads=True)
+except Exception:
+    pass
+
+
+def _thread_hook(args):
+    _log("=== UNCAUGHT IN THREAD ===")
+    try:
+        traceback.print_exception(args.exc_type, args.exc_value,
+                                  args.exc_traceback,
+                                  file=_LOG or sys.__stderr__)
+    except Exception:
+        pass
+
+
 _log("=== boot start ===")
 _log("log file: " + LOG_PATH)
 _log("python: " + sys.version)
@@ -60,6 +79,11 @@ import json
 import threading
 from datetime import datetime
 from pathlib import Path
+
+try:
+    threading.excepthook = _thread_hook
+except Exception:
+    pass
 
 _log("step: stdlib imported")
 
@@ -126,45 +150,44 @@ ON_ANDROID = "ANDROID_ARGUMENT" in os.environ
 
 
 def storage_paths():
-    """يرجع (مجلد_الإعدادات، مجلد_التنزيلات)."""
+    """
+    يرجع (مجلد_الإعدادات، مجلد_التنزيلات) بلا أي استدعاء JNI.
+
+    python-for-android يصدّر المسارات كمتغيّرات بيئة، فلا داعي للمرور
+    بـ jnius أو android.storage — وهما مصدر انهيار أصلي لا يلتقطه
+    try/except على بعض الأجهزة.
+    """
     if not ON_ANDROID:
         base = Path.home() / ".tgstory"
         return base, base / "downloads"
 
-    from android.storage import app_storage_path
+    private = None
+    for var in ("ANDROID_PRIVATE", "ANDROID_APP_PATH", "ANDROID_ARGUMENT"):
+        v = os.environ.get(var)
+        if v:
+            private = Path(v)
+            _log("storage: using $%s = %s" % (var, v))
+            break
+    if private is None:
+        private = Path("/data/data/org.maaf.tgstories/files")
+        _log("storage: falling back to hardcoded private dir")
 
-    private = Path(app_storage_path())
-
-    # الأفضلية: مجلد التنزيلات العام إن سمحت الأذونات
-    try:
-        from android.permissions import Permission, request_permissions
-        request_permissions([
-            Permission.WRITE_EXTERNAL_STORAGE,
-            Permission.READ_EXTERNAL_STORAGE,
-        ])
-        from android.storage import primary_external_storage_path
-        shared = Path(primary_external_storage_path()) / "Download" / "TGStories"
-        shared.mkdir(parents=True, exist_ok=True)
-        probe = shared / ".w"
-        probe.write_text("1")
-        probe.unlink()
-        return private, shared
-    except Exception:
-        pass
-
-    # بديل لا يحتاج أي إذن: Android/data/<package>/files
-    try:
-        from jnius import autoclass
-        activity = autoclass("org.kivy.android.PythonActivity").mActivity
-        ext = activity.getExternalFilesDir(None)
-        if ext:
-            d = Path(ext.getAbsolutePath()) / "Stories"
+    # مجلد مرئي للمستخدم إن سمح النظام، وإلا نكتفي بالخاص
+    for cand in ("/sdcard/Download/TGStories",
+                 "/storage/emulated/0/Download/TGStories",
+                 str(private / "downloads")):
+        try:
+            d = Path(cand)
             d.mkdir(parents=True, exist_ok=True)
+            probe = d / ".w"
+            probe.write_text("1")
+            probe.unlink()
+            _log("storage: downloads -> " + cand)
             return private, d
-    except Exception:
-        pass
+        except Exception as e:
+            _log("storage: %s unusable (%s)" % (cand, type(e).__name__))
 
-    return private, private / "downloads"
+    return private, private
 
 
 # NOTE: these stay None until ensure_paths() runs from on_start().
@@ -660,23 +683,34 @@ class TGStoriesApp(App):
     def safe_boot(self):
         """كل ما يلمس أندرويد يُنفَّذ هنا، لا وقت الاستيراد."""
         try:
+            _log("safe_boot: ensure_paths")
             ensure_paths()
+            _log("safe_boot: paths ok -> %s" % DOWNLOAD_DIR)
             scr = self.sm.get_screen("main")
-            scr.path_lbl.text = ar(f"الحفظ في: {DOWNLOAD_DIR}")
-            self.request_perms()
+            scr.path_lbl.text = ar("الحفظ في: %s" % DOWNLOAD_DIR)
+            _log("safe_boot: boot_client")
             self.boot_client()
+            # الأذونات تُطلب لاحقًا وبمعزل: android.permissions يمرّ عبر JNI،
+            # ووضعها في مسار الإقلاع يعني أن فشلها يمنع التطبيق من العمل.
+            # التخزين الخاص لا يحتاجها أصلًا.
+            Clock.schedule_once(lambda dt: self.request_perms(), 2.0)
+            _log("safe_boot: done")
         except Exception:
+            _log("safe_boot FAILED")
+            traceback.print_exc()
             self.crash(traceback.format_exc())
 
     def request_perms(self):
         if not ON_ANDROID:
             return
+        _log("perms: requesting")
         try:
             from android.permissions import Permission, request_permissions
             request_permissions([Permission.WRITE_EXTERNAL_STORAGE,
                                  Permission.READ_EXTERNAL_STORAGE])
+            _log("perms: ok")
         except Exception:
-            pass          # التخزين الخاص يعمل بلا أذونات
+            _log("perms: unavailable (harmless)")
 
     def boot_client(self):
         cfg = load_config()
