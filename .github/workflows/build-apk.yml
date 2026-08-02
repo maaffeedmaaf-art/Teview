@@ -56,13 +56,17 @@ jobs:
           python -c "import sys; sys.path.insert(0,'.'); import arabic_reshaper; from bidi.algorithm import get_display; print('arabic libs OK')"
           echo "=== check 3 - python version pin ==="
           grep -q "python3==3.12" buildozer.spec && echo "pin OK" || { echo "::error::buildozer.spec is missing the python3==3.12 pin"; exit 1; }
+          echo "=== check 4 - ndk pin ==="
+          grep -q "^android.ndk = 25" buildozer.spec && echo "ndk pin OK" || { echo "::error::buildozer.spec is missing android.ndk = 25b"; exit 1; }
           echo "=== ALL CHECKS PASSED ==="
 
       - name: Free disk space
         run: |
           df -h /
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
-                      /usr/local/share/powershell /usr/share/swift \
+          # NOTE: /usr/local/lib/android is deliberately NOT removed.
+          # ANDROID_SDK_ROOT points there; deleting it can confuse tooling.
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/share/swift \
+                      /usr/local/share/powershell \
                       /opt/hostedtoolcache/CodeQL || true
           sudo apt-get clean
           df -h /
@@ -79,13 +83,13 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.buildozer
-          key: sdk-ndk-${{ runner.os }}-v1
+          key: sdk-ndk-${{ runner.os }}-ndk25b
 
       - name: Cache compiled recipes
         uses: actions/cache@v6
         with:
           path: .buildozer
-          key: recipes-${{ runner.os }}-py31211-${{ hashFiles('buildozer.spec') }}
+          key: recipes-${{ runner.os }}-py31211-ndk25b-${{ hashFiles('buildozer.spec') }}
 
       - name: Install buildozer
         run: |
