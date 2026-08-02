@@ -79,11 +79,6 @@ def storage_paths():
 
     # الأفضلية: مجلد التنزيلات العام إن سمحت الأذونات
     try:
-        from android.permissions import Permission, request_permissions
-        request_permissions([
-            Permission.WRITE_EXTERNAL_STORAGE,
-            Permission.READ_EXTERNAL_STORAGE,
-        ])
         from android.storage import primary_external_storage_path
         shared = Path(primary_external_storage_path()) / "Download" / "TGStories"
         shared.mkdir(parents=True, exist_ok=True)
@@ -109,15 +104,26 @@ def storage_paths():
     return private, private / "downloads"
 
 
-CONFIG_DIR, DOWNLOAD_DIR = storage_paths()
-CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+# NOTE: these stay None until ensure_paths() runs after Kivy starts.
+# Calling request_permissions() at import time - before the Android
+# activity exists - crashes the app before Kivy can show anything.
+CONFIG_DIR = DOWNLOAD_DIR = CONFIG_FILE = SESSION_FILE = None
 
-CONFIG_FILE = CONFIG_DIR / "config.json"
-SESSION_FILE = CONFIG_DIR / "session.txt"
+
+def ensure_paths():
+    """Resolve storage locations. Safe to call more than once."""
+    global CONFIG_DIR, DOWNLOAD_DIR, CONFIG_FILE, SESSION_FILE
+    if CONFIG_DIR is not None:
+        return
+    CONFIG_DIR, DOWNLOAD_DIR = storage_paths()
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE = CONFIG_DIR / "config.json"
+    SESSION_FILE = CONFIG_DIR / "session.txt"
 
 
 def load_config():
+    ensure_paths()
     if CONFIG_FILE.exists():
         try:
             return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
@@ -127,6 +133,7 @@ def load_config():
 
 
 def save_config(cfg):
+    ensure_paths()
     CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
 
 
@@ -388,7 +395,8 @@ class MainScreen(Screen):
         sv.add_widget(self.log_box)
         root.add_widget(sv)
 
-        root.add_widget(L(f"الحفظ في: {DOWNLOAD_DIR}", 11, MUTED, halign="left"))
+        self.path_lbl = L("", 11, MUTED, halign="left")
+        root.add_widget(self.path_lbl)
         self.add_widget(root)
 
     # -- تسجيل آمن عبر الخيوط -------------------------------------------
@@ -524,6 +532,24 @@ class LoadingScreen(Screen):
         self.add_widget(b)
 
 
+class CrashScreen(Screen):
+    """يعرض الخطأ على الشاشة بدل الانهيار الصامت — لا يوجد logcat على الهاتف."""
+
+    def __init__(self, text, **kw):
+        super().__init__(**kw)
+        root = Pad(spacing=dp(8))
+        root.add_widget(L("حدث خطأ أثناء الإقلاع", 20, (1, 0.5, 0.5, 1), bold=True))
+        root.add_widget(L("صوّر هذي الشاشة وأرسلها.", 13, MUTED))
+        sv = ScrollView()
+        lbl = Label(text=text, font_size=dp(11), halign="left", valign="top",
+                    size_hint_y=None, color=(1, 0.85, 0.85, 1))
+        lbl.bind(width=lambda w, v: setattr(w, "text_size", (v, None)),
+                 texture_size=lambda w, v: setattr(w, "height", v[1]))
+        sv.add_widget(lbl)
+        root.add_widget(sv)
+        self.add_widget(root)
+
+
 class TGStoriesApp(App):
     client = None
 
@@ -533,15 +559,49 @@ class TGStoriesApp(App):
         # يرفع الحقل فوق لوحة المفاتيح بدل أن تغطّيه
         Window.softinput_mode = "below_target"
         self.sm = ScreenManager(transition=SlideTransition(duration=0.2))
-        self.sm.add_widget(LoadingScreen(name="loading"))
-        self.sm.add_widget(SetupScreen(name="setup"))
-        self.sm.add_widget(LoginScreen(name="login"))
-        self.sm.add_widget(MainScreen(name="main"))
-        Clock.schedule_once(lambda dt: self.boot_client(), 0.4)
+        try:
+            self.sm.add_widget(LoadingScreen(name="loading"))
+            self.sm.add_widget(SetupScreen(name="setup"))
+            self.sm.add_widget(LoginScreen(name="login"))
+            self.sm.add_widget(MainScreen(name="main"))
+        except Exception:
+            self.sm.add_widget(CrashScreen(traceback.format_exc(), name="crash"))
+            self.sm.current = "crash"
+            return self.sm
+        Clock.schedule_once(lambda dt: self.safe_boot(), 0.4)
         return self.sm
+
+    def crash(self, exc_text):
+        try:
+            if not self.sm.has_screen("crash"):
+                self.sm.add_widget(CrashScreen(exc_text, name="crash"))
+            self.sm.current = "crash"
+        except Exception:
+            traceback.print_exc()
 
     def goto(self, name):
         Clock.schedule_once(lambda dt: setattr(self.sm, "current", name), 0)
+
+    def safe_boot(self):
+        """كل ما يلمس أندرويد يُنفَّذ هنا، لا وقت الاستيراد."""
+        try:
+            ensure_paths()
+            scr = self.sm.get_screen("main")
+            scr.path_lbl.text = ar(f"الحفظ في: {DOWNLOAD_DIR}")
+            self.request_perms()
+            self.boot_client()
+        except Exception:
+            self.crash(traceback.format_exc())
+
+    def request_perms(self):
+        if not ON_ANDROID:
+            return
+        try:
+            from android.permissions import Permission, request_permissions
+            request_permissions([Permission.WRITE_EXTERNAL_STORAGE,
+                                 Permission.READ_EXTERNAL_STORAGE])
+        except Exception:
+            pass          # التخزين الخاص يعمل بلا أذونات
 
     def boot_client(self):
         cfg = load_config()
@@ -568,8 +628,7 @@ class TGStoriesApp(App):
             try:
                 self.goto("main" if fut.result() else "login")
             except Exception:
-                traceback.print_exc()
-                self.goto("setup")
+                self.crash(traceback.format_exc())
 
         WORKER.submit(connect(), done)
 
