@@ -24,6 +24,10 @@ jobs:
         with:
           python-version: '3.11'
 
+      # Vendored, not in requirements: buildozer splits on "==" and stores
+      # the version in an env var only recipes read. python-bidi has no
+      # recipe, so the 0.4.2 pin would be dropped and pip would fetch the
+      # Rust-based 0.5+ which cannot build for Android.
       - name: Vendor Arabic libraries
         run: |
           pip download "python-bidi==0.4.2" "arabic_reshaper==3.0.1" six \
@@ -101,8 +105,15 @@ jobs:
       - name: Build APK
         run: |
           export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which javac))))
-          set -o pipefail
-          yes | buildozer -v android debug 2>&1 | tee build.log
+          # No 'yes |' and no pipefail. When buildozer exits it closes the
+          # pipe, 'yes' dies from SIGPIPE with status 141, and pipefail then
+          # reports a false failure even though the APK built fine.
+          # android.accept_sdk_license = True already answers the prompt.
+          buildozer -v android debug 2>&1 | tee build.log
+          echo "=== bin/ ==="
+          ls -la bin/ || true
+          # Trust the artifact, not the exit code.
+          ls bin/*.apk >/dev/null 2>&1 || { echo "::error::No APK was produced"; exit 1; }
 
       - name: Extract errors
         if: failure()
