@@ -48,16 +48,18 @@ jobs:
           ls -la
           echo "=== main.py first line ==="
           head -1 main.py || echo "MISSING main.py"
-          echo "=== buildozer.spec requirements line ==="
-          grep -n "^requirements" buildozer.spec || echo "MISSING requirements line"
+          echo "=== buildozer.spec key lines ==="
+          grep -nE "^requirements|^android\.(ndk|ndk_api|minapi|api|archs)" buildozer.spec
           echo "=== check 1 - main.py syntax ==="
           python -c "import ast,io; ast.parse(io.open('main.py',encoding='utf-8').read()); print('main.py parses OK')"
           echo "=== check 2 - vendored arabic libs ==="
           python -c "import sys; sys.path.insert(0,'.'); import arabic_reshaper; from bidi.algorithm import get_display; print('arabic libs OK')"
-          echo "=== check 3 - python version pin ==="
-          grep -q "python3==3.12" buildozer.spec && echo "pin OK" || { echo "::error::buildozer.spec is missing the python3==3.12 pin"; exit 1; }
-          echo "=== check 4 - ndk pin ==="
-          grep -q "^android.ndk = 25" buildozer.spec && echo "ndk pin OK" || { echo "::error::buildozer.spec is missing android.ndk = 25b"; exit 1; }
+          echo "=== check 3 - python pinned to 3.12 ==="
+          grep -q "python3==3.12" buildozer.spec && echo "python pin OK" || { echo "::error::buildozer.spec missing python3==3.12 pin"; exit 1; }
+          echo "=== check 4 - ndk pinned to 25 ==="
+          grep -qE "^android\.ndk = 25" buildozer.spec && echo "ndk pin OK" || { echo "::error::buildozer.spec missing android.ndk = 25b"; exit 1; }
+          echo "=== check 5 - ndk_api is 26 ==="
+          grep -qE "^android\.ndk_api = 26" buildozer.spec && echo "ndk_api OK" || { echo "::error::ndk_api must be 26; setgrent is undeclared below API 26"; exit 1; }
           echo "=== ALL CHECKS PASSED ==="
 
       - name: Free disk space
