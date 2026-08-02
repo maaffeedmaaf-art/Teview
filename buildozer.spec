@@ -23,8 +23,14 @@ fullscreen = 0
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
 
 android.api = 34
-android.minapi = 24
-android.ndk_api = 24
+
+# API 26 is required, not optional: Bionic only declares setgrent/getgrent/
+# endgrent from API 26. CPython's configure finds the symbols in libc.so and
+# defines HAVE_GETGRENT, then grpmodule.c fails with -Werror because grp.h
+# does not declare them below 26. arm64-only means every target device is
+# Android 8+ anyway.
+android.minapi = 26
+android.ndk_api = 26
 
 # p4a declares MIN_NDK_VERSION=25 and MAX_NDK_VERSION=25, but buildozer
 # reads RECOMMENDED_NDK_VERSION ("28c") and downloads that. r28c's clang
