@@ -1,23 +1,67 @@
 # -*- coding: utf-8 -*-
 """
 TG Stories — تطبيق أندرويد لتنزيل قصص تيليجرام بصفة مجهولة
-============================================================
-لا يرسل ReadStories ولا IncrementStoryViews، لذلك لا يُسجَّل اسمك
-في قائمة المشاهدين.
-
-البنية:
-  - Kivy للواجهة (تعمل على الـ main thread)
-  - asyncio + Telethon في thread منفصل
-  - StringSession في ملف نصي (أخف وأثبت من sqlite على أندرويد)
 """
+
+# ===========================================================================
+# لاقط الأعطال — يجب أن يسبق استيراد Kivy.
+# الانهيار يقع قبل ظهور أي شاشة، فلا تنفع شاشة خطأ داخل التطبيق.
+# نوجّه stdout/stderr إلى ملف نصي يمكن فتحه بمدير الملفات.
+# ===========================================================================
+import os
+import sys
+import traceback
+
+_LOG = None
+LOG_PATH = "(none)"
+for _base in ("/sdcard/Download",
+              "/storage/emulated/0/Download",
+              "/sdcard/Android/data/org.maaf.tgstories/files",
+              "/data/data/org.maaf.tgstories/files"):
+    try:
+        os.makedirs(_base, exist_ok=True)
+        _p = os.path.join(_base, "tgstories.log")
+        _LOG = open(_p, "w", buffering=1, encoding="utf-8", errors="replace")
+        LOG_PATH = _p
+        break
+    except Exception:
+        _LOG = None
+
+if _LOG:
+    sys.stdout = sys.stderr = _LOG
+    os.environ.setdefault("KIVY_HOME", os.path.join(os.path.dirname(LOG_PATH),
+                                                    ".kivy_tgstories"))
+
+
+def _log(msg):
+    try:
+        (_LOG or sys.__stderr__).write(str(msg) + "\n")
+        (_LOG or sys.__stderr__).flush()
+    except Exception:
+        pass
+
+
+def _hook(tp, val, tb):
+    _log("=== UNCAUGHT ===")
+    try:
+        traceback.print_exception(tp, val, tb, file=_LOG or sys.__stderr__)
+        (_LOG or sys.__stderr__).flush()
+    except Exception:
+        pass
+
+
+sys.excepthook = _hook
+_log("=== boot start ===")
+_log("log file: " + LOG_PATH)
+_log("python: " + sys.version)
 
 import asyncio
 import json
-import os
 import threading
-import traceback
 from datetime import datetime
 from pathlib import Path
+
+_log("step: stdlib imported")
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -32,13 +76,22 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 
+_log("step: kivy imported")
+
 # ---------------------------------------------------------------------------
 # الخط العربي + التشكيل ثنائي الاتجاه
 # ---------------------------------------------------------------------------
 
 FONT = str(Path(__file__).parent / "assets" / "NotoNaskhArabic-Regular.ttf")
-if os.path.exists(FONT):
-    LabelBase.register(DEFAULT_FONT, FONT)
+try:
+    if os.path.exists(FONT):
+        LabelBase.register(DEFAULT_FONT, FONT)
+        _log("step: font registered")
+    else:
+        _log("WARN: font missing at " + FONT)
+except Exception:
+    _log("WARN: font registration failed")
+    traceback.print_exc()
 
 try:
     import arabic_reshaper
@@ -55,9 +108,14 @@ try:
         except Exception:
             return str(text)
 
-except ImportError:
+except Exception:
+    _log("WARN: arabic libs unavailable")
+
     def ar(text):
         return str(text)
+
+
+_log("step: arabic ready")
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +137,11 @@ def storage_paths():
 
     # الأفضلية: مجلد التنزيلات العام إن سمحت الأذونات
     try:
+        from android.permissions import Permission, request_permissions
+        request_permissions([
+            Permission.WRITE_EXTERNAL_STORAGE,
+            Permission.READ_EXTERNAL_STORAGE,
+        ])
         from android.storage import primary_external_storage_path
         shared = Path(primary_external_storage_path()) / "Download" / "TGStories"
         shared.mkdir(parents=True, exist_ok=True)
@@ -104,7 +167,7 @@ def storage_paths():
     return private, private / "downloads"
 
 
-# NOTE: these stay None until ensure_paths() runs after Kivy starts.
+# NOTE: these stay None until ensure_paths() runs from on_start().
 # Calling request_permissions() at import time - before the Android
 # activity exists - crashes the app before Kivy can show anything.
 CONFIG_DIR = DOWNLOAD_DIR = CONFIG_FILE = SESSION_FILE = None
@@ -162,7 +225,19 @@ class AsyncWorker:
         return fut
 
 
-WORKER = AsyncWorker()
+_WORKER = None
+
+
+class _LazyWorker:
+    def submit(self, coro, on_done=None):
+        global _WORKER
+        if _WORKER is None:
+            _WORKER = AsyncWorker()
+        return _WORKER.submit(coro, on_done)
+
+
+WORKER = _LazyWorker()
+_log("step: worker ready")
 
 
 # ---------------------------------------------------------------------------
@@ -634,4 +709,10 @@ class TGStoriesApp(App):
 
 
 if __name__ == "__main__":
-    TGStoriesApp().run()
+    _log("step: starting app")
+    try:
+        TGStoriesApp().run()
+    except Exception:
+        _log("=== CRASH IN run() ===")
+        traceback.print_exc()
+        raise
