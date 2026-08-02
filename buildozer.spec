@@ -26,6 +26,11 @@ android.api = 34
 android.minapi = 24
 android.ndk_api = 24
 
+# p4a declares MIN_NDK_VERSION=25 and MAX_NDK_VERSION=25, but buildozer
+# reads RECOMMENDED_NDK_VERSION ("28c") and downloads that. r28c's clang
+# rejects '-print-multi-os-directory', breaking configure. Pin to 25.
+android.ndk = 25b
+
 # Single architecture = much faster build, covers most phones since 2017
 android.archs = arm64-v8a
 
