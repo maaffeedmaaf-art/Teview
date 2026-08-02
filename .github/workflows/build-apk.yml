@@ -58,6 +58,15 @@ jobs:
           grep -q "python3==3.12" buildozer.spec && echo "pin OK" || { echo "::error::buildozer.spec is missing the python3==3.12 pin"; exit 1; }
           echo "=== ALL CHECKS PASSED ==="
 
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                      /usr/local/share/powershell /usr/share/swift \
+                      /opt/hostedtoolcache/CodeQL || true
+          sudo apt-get clean
+          df -h /
+
       - name: System dependencies
         run: |
           sudo apt-get update -qq
@@ -93,13 +102,15 @@ jobs:
         if: failure()
         run: |
           if [ -f build.log ]; then
+            sed -r 's/\x1b\[[0-9;]*[a-zA-Z]//g' build.log > clean.log
             {
-              echo "===== ERROR CONTEXT ====="
-              grep -n -B8 -A25 -m2 -E "Traceback \(most recent call last\)|\[ERROR\]|Error compiling|Command failed" build.log | head -180
+              echo "===== FAILURE CONTEXT ====="
+              grep -n -A30 -m3 -E "^STDERR:|Error compiling|fatal error:|error: |No space left" clean.log | head -150
               echo
-              echo "===== LAST 60 REAL LINES (env dump filtered) ====="
-              grep -vE "^#? *[A-Z_0-9]+ = " build.log | tail -60
+              echo "===== LAST 120 REAL LINES (env dump removed) ====="
+              grep -vE "^#[[:space:]]+[A-Za-z_0-9]+ = " clean.log | tail -120
             } > errors.txt
+            gzip -c clean.log > build-log.gz
           else
             echo "Build never started - see the Early checks step above." > errors.txt
           fi
@@ -110,7 +121,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: build-errors
-          path: errors.txt
+          path: |
+            errors.txt
+            build-log.gz
           retention-days: 14
           if-no-files-found: warn
 
